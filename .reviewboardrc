@@ -1,0 +1,8 @@
+REVIEWBOARD_URL = "https://reviewboard.oktetlabs.ru"
+REPOSITORY = "ol-qa-tools"
+REPOSITORY_TYPE = "git"
+DISABLE_SSL_VERIFICATION = True
+PUBLISH = False
+BRANCH = "main"
+TRACKING_BRANCH = "origin/main"
+TARGET_GROUPS = "qms"
