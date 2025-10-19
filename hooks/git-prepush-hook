@@ -825,7 +825,6 @@ function check_revert ()
 
 #shellcheck disable=SC2034
 while read -r localref localsha remoteref remotesha; do
-    echo "$localref $localsha $remoteref $remotesha" >&2
     # Local branch is deleted, nothing to do
     [[ "${localsha}" == "${Z40}" ]] && continue
 
