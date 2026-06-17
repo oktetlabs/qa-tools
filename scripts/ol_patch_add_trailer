@@ -21,7 +21,12 @@ SINGLE="$(git config --get --type bool --default false \
                add-trailer.single)"
 VERBOSE="$(git config --get --type bool --default false \
                  add-trailer.verbose)"
+
+THIS_EMAIL="$(git config --get user.email)"
+THIS_USER="$(git config --get user.name) <${THIS_EMAIL,,}>"
+
 GUESS_FIXES=
+SIGNOFF_BY=
 DO_REORDER=
 
 declare -A TRAILER_MAP=([--reviewed-by]=Reviewed-by
@@ -103,7 +108,26 @@ EOF
 --suggested-by=USER Similiar to --reviewed-by, but the added trailer
                     is different.
 
--s, --signoff       Add a Signed-off-by trailer for the current Git user.
+-s, --signoff       Add a Signed-off-by trailer for the current Git user
+                    (same as --signoff=+myself).
+
+--signoff=ROLES     Add or remove Signed-off-by trailers corresponding to
+                    a comma-separated list of roles:
+
+                    -  -first      Remove the first Signed-off-by trailer.
+                    -  -last       Remove the last Signed-off-by trailer.
+                    -  +author     Add Signed-off-by of the author of the current
+                                   commit.
+                    -  +committer  Add Signed-off-by of the author of the current
+                                   commit.
+                    -  +myself     Add Signed-off-by for the current Git user.
+
+                    If there is already a Signed-off-by for a given person,
+                    it is never added for the secod time.
+
+                    Note that due to limitations of git interpret-trailers
+                    it is not possible to remove all Signed-off-by trailers
+                    at once.
 
 --coauthor          Add a Co-developed-by and Signed-off-by trailers for
                     the current Git user.
@@ -202,16 +226,6 @@ EOF
                     Not applicable to stgit-managed branches.
 
 EOF
-}
-
-function this_user ()
-{
-    local name
-    local email
-
-    name="$(git config --get user.name)"
-    email="$(git config --get user.email)"
-    echo "${name} <${email,,}>"
 }
 
 function maybe_copy_trailer ()
@@ -351,6 +365,51 @@ function add_guess_fixes ()
     done
 }
 
+function add_patch_signoff ()
+{
+    local mode="$1"
+    local where="$2"
+    local who="$3"
+
+    PATCH_TRAILER_ARGS+=("--where" "${where}" "--if-exists" "${mode}"
+                         "--trim-empty" "--trailer" "Signed-off-by=${who}")
+}
+
+function add_patch_author_signoff ()
+{
+    local rev="$1"
+    local author
+    local committer
+    local role
+
+    committer="$(git log -1 --format='%cn <%ce>' "${rev}")"
+    author="$(git log -1 --format='%an <%ae>' "${rev}")"
+
+    for role in ${SIGNOFF_BY//,/ }; do
+        case "${role}" in
+            -first)
+                add_patch_signoff replace before ""
+                ;;
+            -last)
+                add_patch_signoff replace after ""
+                ;;
+            +author)
+                add_patch_signoff addIfDifferent after "${author}"
+                ;;
+            +committer)
+                add_patch_signoff addIfDifferent after "${committer}"
+                ;;
+            +myself)
+                add_patch_signoff addIfDifferent after "${THIS_USER}"
+                ;;
+            *)
+                echo "Unknown signed-off role '${role}'" >&2
+                exit 1
+                ;;
+        esac
+    done
+}
+
 declare -A TRAILER_ORDER
 
 # Non-trailer lines get the rank of 0.
@@ -464,23 +523,22 @@ for arg; do
                 exit $?
             ;;
         -s | --signoff)
-            TRAILER_ARGS+=("--where" "end" "--if-exists" "addIfDifferent"
-                           "--trailer" "Signed-off-by=$(this_user)") ||
-                exit $?
+            SIGNOFF_BY="+myself"
+            ;;
+        --signoff=*)
+            SIGNOFF_BY="${arg#--signoff=}"
             ;;
         --coauthor=*)
             username="$(maybe_copy_trailer "Co-developed-by" "${arg#--*=}")"
-            username="$(map_user "${username}")"
+            username="$(map_user "${username}")" || exit $?
             TRAILER_ARGS+=("--where" "end" "--if-exists" "add"
                            "--trailer" "Co-developed-by=${username}"
-                           "--trailer" "Signed-off-by=${username}") ||
-                exit $?
+                           "--trailer" "Signed-off-by=${username}")
             ;;
         --coauthor)
             TRAILER_ARGS+=("--where" "end" "--if-exists" "add"
-                           "--trailer" "Co-developed-by=$(this_user)"
-                           "--trailer" "Signed-off-by=$(this_user)") ||
-                exit $?
+                           "--trailer" "Co-developed-by=${THIS_USER}"
+                           "--trailer" "Signed-off-by=${THIS_USER}")
             ;;
         --redmine-id=*)
             TRAILER_ARGS+=("--where" "start" "--if-exists" "replace"
@@ -656,6 +714,7 @@ if [[ "${USE_STGIT}" == "true" ]]; then
         rev="$(stg id "${p}")" || exit $?
         PATCH_TRAILER_ARGS=()
         add_guess_fixes "${rev}"
+        add_patch_author_signoff "${rev}"
 
         ${DRYRUN} stg edit -m "$(transform_trailers "${rev}")" "${p}" || exit $?
     }
@@ -712,6 +771,7 @@ else
         verbose "Processing ${rev}"
         PATCH_TRAILER_ARGS=()
         add_guess_fixes "${rev}"
+        add_patch_author_signoff "${rev}"
 
         ${DRYRUN} git commit --amend -m "$(transform_trailers "${rev}")" || exit $?
         lastrev="${rev}"
